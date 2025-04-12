@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pedidos de Comida V3 (Spring+Hibernate)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Estilos personalizados */
+        body { font-family: 'Inter', sans-serif; }
+        .message { padding: 1rem; margin-bottom: 1rem; border-radius: 0.375rem; font-weight: 500; }
+        .message-success { background-color: #d1fae5; /* green-100 */ color: #065f46; /* green-800 */ }
+        .message-error { background-color: #fee2e2; /* red-100 */ color: #991b1b; /* red-800 */ }
+        select:disabled { background-color: #f3f4f6; /* gray-100 */ cursor: not-allowed; }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-100 p-8">
+
+<div class="container mx-auto max-w-4xl bg-white p-6 rounded-lg shadow-md">
+    <h1 class="text-3xl font-bold mb-6 text-center text-gray-800">Sistema de Pedidos de Comida (V3 - Spring+Hibernate)</h1>
+
+    <div id="message-area" class="mb-4"></div>
+
+    <div class="mb-8 p-4 border border-gray-200 rounded-lg bg-gray-50">
+        <h2 class="text-xl font-semibold mb-4 text-gray-700">Crear Nuevo Pedido</h2>
+        <form id="create-order-form" class="space-y-4">
+            <div>
+                <label for="customerName" class="block text-sm font-medium text-gray-600">Nombre del Cliente:</label>
+                <input type="text" id="customerName" name="customerName" required
+                       class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+            </div>
+            <div>
+                <label for="item" class="block text-sm font-medium text-gray-600">Platillo:</label>
+                <select id="item" name="item" required
+                        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    <option value="" disabled selected>Cargando platillos...</option>
+                </select>
+            </div>
+            <div>
+                <label for="quantity" class="block text-sm font-medium text-gray-600">Cantidad:</label>
+                <input type="number" id="quantity" name="quantity" required min="1"
+                       class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+            </div>
+            <button type="submit"
+                    class="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                Crear Pedido
+            </button>
+        </form>
+    </div>
+
+    <div>
+        <h2 class="text-xl font-semibold mb-4 text-gray-700">Pedidos Existentes</h2>
+        <button id="refresh-orders" class="mb-4 py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+            Actualizar Lista
+        </button>
+        <div id="orders-list" class="space-y-3">
+            <p class="text-gray-500">Cargando pedidos...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- Configuración ---
+    // IMPORTANTE: Ajusta esta variable al nombre de tu aplicación desplegada en Tomcat (el nombre del .war)
+    const API_CONTEXT = '/food-order-app-v3'; // Ajusta si tu WAR se despliega con otro nombre
+    const API_BASE_URL = `http://localhost:8080${API_CONTEXT}/api`; // Asume Tomcat en puerto 8080
+    const ORDERS_API_URL = `${API_BASE_URL}/orders`;
+    const DISHES_API_URL = `${API_BASE_URL}/dishes`;
+
+    // --- Referencias a Elementos del DOM ---
+    const orderForm = document.getElementById('create-order-form');
+    const ordersList = document.getElementById('orders-list');
+    const refreshButton = document.getElementById('refresh-orders');
+    const messageArea = document.getElementById('message-area');
+    const itemSelect = document.getElementById('item');
+
+    // --- Funciones Auxiliares ---
+
+    /** Muestra un mensaje temporal al usuario. */
+    function showMessage(text, type = 'success') {
+        messageArea.innerHTML = ''; // Limpia mensajes anteriores
+        const messageDiv = document.createElement('div');
+        messageDiv.textContent = text;
+        messageDiv.className = `message ${type === 'success' ? 'message-success' : 'message-error'}`;
+        messageArea.appendChild(messageDiv);
+        setTimeout(() => { messageDiv.remove(); }, 5000); // Oculta después de 5 seg
+    }
+
+    /** Crea el HTML para mostrar un pedido en la lista. */
+    function createOrderElement(order) {
+        const div = document.createElement('div');
+        div.className = 'p-4 border border-gray-200 rounded-lg bg-white shadow-sm flex justify-between items-center';
+        const buttonsHtml = `
+            ${order.status === 'PENDING' ? `<button data-id="${order.id}" data-status="PROCESSING" class="update-status-btn px-3 py-1 text-xs font-medium rounded-md text-white bg-yellow-500 hover:bg-yellow-600">Procesar</button>` : ''}
+            ${order.status === 'PROCESSING' ? `<button data-id="${order.id}" data-status="COMPLETED" class="update-status-btn px-3 py-1 text-xs font-medium rounded-md text-white bg-green-500 hover:bg-green-600">Completar</button>` : ''}
+        `;
+        div.innerHTML = `
+            <div>
+                <p class="font-medium text-gray-800">ID: ${order.id} - ${order.item} (x${order.quantity})</p>
+                <p class="text-sm text-gray-600">Cliente: ${order.customerName}</p>
+                <p class="text-sm text-gray-600">Estado: <span class="font-semibold status-${order.status.toLowerCase()}">${order.status}</span></p>
+            </div>
+            <div class="flex space-x-2">
+                ${buttonsHtml}
+             </div>
+        `;
+        return div;
+    }
+
+    // --- Lógica Principal ---
+
+    /** Obtiene la lista de platillos permitidos de la API y rellena el select. */
+    async function fetchAndPopulateDishes() {
+        itemSelect.disabled = true;
+        itemSelect.innerHTML = '<option value="" disabled selected>Cargando platillos...</option>';
+        try {
+            const response = await fetch(DISHES_API_URL);
+            if (!response.ok) throw new Error(`Error HTTP: ${response.status}`);
+            const dishes = await response.json();
+
+            itemSelect.innerHTML = '<option value="" disabled selected>-- Selecciona un platillo --</option>';
+            dishes.forEach(dish => {
+                const option = document.createElement('option');
+                option.value = dish;
+                option.textContent = dish;
+                itemSelect.appendChild(option);
+            });
+            itemSelect.disabled = false;
+        } catch (error) {
+            console.error('Error al cargar platillos:', error);
+            itemSelect.innerHTML = '<option value="" disabled selected>Error al cargar</option>';
+            showMessage(`Error al cargar platillos: ${error.message}`, 'error');
+        }
+    }
+
+    /** Obtiene la lista de pedidos de la API y los muestra. */
+    async function fetchAndDisplayOrders() {
+        ordersList.innerHTML = '<p class="text-gray-500">Cargando pedidos...</p>';
+        try {
+            const response = await fetch(ORDERS_API_URL);
+            if (!response.ok) throw new Error(`Error HTTP: ${response.status}`);
+            const orders = await response.json();
+
+            ordersList.innerHTML = ''; // Limpia la lista
+            if (orders.length === 0) {
+                ordersList.innerHTML = '<p class="text-gray-500">No hay pedidos registrados.</p>';
+            } else {
+                orders.sort((a, b) => b.id - a.id); // Ordena por ID descendente
+                orders.forEach(order => ordersList.appendChild(createOrderElement(order)));
+                addUpdateStatusListeners(); // Añade listeners a los botones
+            }
+        } catch (error) {
+            console.error('Error al cargar pedidos:', error);
+            ordersList.innerHTML = '<p class="text-red-500">Error al cargar los pedidos.</p>';
+            showMessage(`Error al cargar pedidos: ${error.message}`, 'error');
+        }
+    }
+
+    /** Maneja el clic en los botones de actualizar estado. */
+    async function handleUpdateStatus(event) {
+        const button = event.target;
+        const orderId = button.dataset.id;
+        const newStatus = button.dataset.status;
+
+        console.log(`Intentando actualizar pedido ${orderId} a estado ${newStatus}`);
+        button.disabled = true; // Deshabilita botón
+
+        try {
+            const response = await fetch(`${ORDERS_API_URL}/${orderId}/status`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: newStatus }),
+            });
+
+            if (!response.ok) {
+                let errorMsg = `Error HTTP: ${response.status}`;
+                try { const errorData = await response.json(); errorMsg = errorData.error || errorMsg; } catch (e) {}
+                throw new Error(errorMsg);
+            }
+
+            showMessage(`Pedido ${orderId} actualizado a ${newStatus}.`, 'success');
+            fetchAndDisplayOrders(); // Recarga la lista
+        } catch (error) {
+            console.error(`Error al actualizar estado del pedido ${orderId}:`, error);
+            showMessage(`Error al actualizar estado: ${error.message}`, 'error');
+            button.disabled = false; // Rehabilita si hay error
+        }
+    }
+
+    /** Añade event listeners a todos los botones de actualizar estado. */
+    function addUpdateStatusListeners() {
+        const updateButtons = document.querySelectorAll('.update-status-btn');
+        updateButtons.forEach(button => {
+            button.removeEventListener('click', handleUpdateStatus); // Evita duplicados
+            button.addEventListener('click', handleUpdateStatus);
+        });
+    }
+
+    // --- Event Listeners ---
+
+    /** Maneja el envío del formulario de creación de pedidos. */
+    orderForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const submitButton = orderForm.querySelector('button[type="submit"]');
+        submitButton.disabled = true; // Deshabilita botón
+
+        const formData = new FormData(orderForm);
+        const orderData = {
+            customerName: formData.get('customerName'),
+            item: itemSelect.value,
+            quantity: parseInt(formData.get('quantity'), 10)
+        };
+
+        if (!orderData.item || !orderData.customerName || !(orderData.quantity > 0)) {
+            showMessage('Por favor, completa todos los campos correctamente.', 'error');
+            submitButton.disabled = false;
+            return;
+        }
+
+        console.log("Enviando pedido:", orderData);
+
+        try {
+            const response = await fetch(ORDERS_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(orderData),
+            });
+
+            if (!response.ok) {
+                let errorMsg = `Error HTTP: ${response.status}`;
+                try { const errorData = await response.json(); errorMsg = errorData.error || errorMsg; console.error('Error response data:', errorData); } catch (e) {}
+                throw new Error(errorMsg);
+            }
+
+            const newOrder = await response.json();
+            console.log('Pedido creado:', newOrder);
+            showMessage('Pedido creado exitosamente!', 'success');
+            orderForm.reset();
+            itemSelect.selectedIndex = 0;
+            fetchAndDisplayOrders(); // Actualiza la lista
+
+        } catch (error) {
+            console.error('Error al crear pedido:', error);
+            showMessage(`Error al crear el pedido: ${error.message}`, 'error');
+        } finally {
+             submitButton.disabled = false; // Rehabilita el botón
+        }
+    });
+
+    /** Maneja el clic en el botón de actualizar lista. */
+    refreshButton.addEventListener('click', () => {
+         fetchAndDisplayOrders();
+         fetchAndPopulateDishes(); // Recarga platillos también
+    });
+
+    // --- Carga Inicial ---
+    document.addEventListener('DOMContentLoaded', () => {
+        fetchAndPopulateDishes();
+        fetchAndDisplayOrders();
+    });
+
+</script>
+</body>
+</html>
